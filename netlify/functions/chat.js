@@ -1,4 +1,5 @@
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const UPSTREAM_TIMEOUT_MS = 20000;
 
 const jsonResponse = (statusCode, body) => ({
   statusCode,
@@ -40,7 +41,7 @@ export const handler = async (event) => {
     return jsonResponse(400, { error: "Invalid JSON body" });
   }
 
-  const model = payload.model || "gpt-oss-20b";
+  const model = payload.model || process.env.OPENROUTER_MODEL || "openrouter/auto";
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
 
   if (!messages.length) {
@@ -48,16 +49,25 @@ export const handler = async (event) => {
   }
 
   try {
-    const upstream = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": process.env.SITE_URL || "https://netlify.app",
-        "X-Title": "AI Disease Predictor"
-      },
-      body: JSON.stringify({ model, messages })
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
+    let upstream;
+    try {
+      upstream = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+          "HTTP-Referer": process.env.SITE_URL || "https://netlify.app",
+          "X-Title": "AI Disease Predictor"
+        },
+        body: JSON.stringify({ model, messages }),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await upstream.text();
     return {
@@ -69,6 +79,13 @@ export const handler = async (event) => {
       body: text
     };
   } catch (error) {
+    if (error.name === "AbortError") {
+      return jsonResponse(504, {
+        error: "Upstream timeout",
+        details: "Provider took too long to respond"
+      });
+    }
+
     return jsonResponse(502, {
       error: "Upstream request failed",
       details: error.message

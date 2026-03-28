@@ -21,35 +21,45 @@ function App() {
 
   const handleSendMessage = async (text) => {
     const newUserMsg = { id: Date.now(), sender: 'user', text };
-    setMessages((prev) => [...prev, newUserMsg]);
-    
-    // Add temporary loading message for bot
     const typingMsgId = Date.now() + 1;
-    setMessages((prev) => [...prev, { id: typingMsgId, sender: 'bot', text: 'Typing...' }]);
-
-    // Call real AI
-    const response = await generateBotResponse(text, symptomData);
-    
-    // Update data array
-    setSymptomData((prev) => [...prev, text]);
-
-    // Remove typing message and add real bot message
     setMessages((prev) => [
-      ...prev.filter(m => m.id !== typingMsgId),
-      { id: Date.now() + 2, sender: 'bot', text: response.text }
+      ...prev,
+      newUserMsg,
+      { id: typingMsgId, sender: 'bot', text: 'Typing...' }
     ]);
-    
-    if (response.readyForPrediction) {
-      setReadyForPrediction(true);
+
+    try {
+      const response = await generateBotResponse(text, symptomData);
+
+      setSymptomData((prev) => [...prev, text]);
+      setMessages((prev) => [
+        ...prev.filter(m => m.id !== typingMsgId),
+        { id: Date.now() + 2, sender: 'bot', text: response.text }
+      ]);
+
+      if (response.readyForPrediction) {
+        setReadyForPrediction(true);
+      }
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev.filter(m => m.id !== typingMsgId),
+        {
+          id: Date.now() + 2,
+          sender: 'bot',
+          text: 'Request failed or timed out. Please try again.'
+        }
+      ]);
     }
   };
 
   const handlePredict = async () => {
-    setIsPredicting(true);
-    // Call Real AI Prediction
-    const result = await runPredictionEngine(symptomData.join(' '));
-    setPredictionResult(result);
-    setIsPredicting(false);
+    try {
+      setIsPredicting(true);
+      const result = await runPredictionEngine(symptomData.join(' '));
+      setPredictionResult(result);
+    } finally {
+      setIsPredicting(false);
+    }
   };
 
   const handleReset = () => {

@@ -1,12 +1,92 @@
 // Real AI Logic using OpenRouter API
 
-const API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || import.meta.env.VITE_OPENAI_API_KEY;
+const API_PROXY_URL = import.meta.env.VITE_API_PROXY_URL;
+const LOCAL_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || import.meta.env.VITE_OPENAI_API_KEY;
+const DEFAULT_NETLIFY_FUNCTION_URL = '/.netlify/functions/chat';
+const DEFAULT_MODEL = import.meta.env.VITE_OPENROUTER_MODEL || 'openrouter/auto';
+const REQUEST_TIMEOUT_MS = 20000;
+
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+const getApiEndpoint = () => {
+  if (API_PROXY_URL) return API_PROXY_URL;
+  if (import.meta.env.PROD) return DEFAULT_NETLIFY_FUNCTION_URL;
+  return OPENROUTER_URL;
+};
+
+const getHeaders = () => {
+  const isNetlifyFunctionInProd = !API_PROXY_URL && import.meta.env.PROD;
+
+  // Preferred mode: call your backend proxy (no secret in browser).
+  if (API_PROXY_URL || isNetlifyFunctionInProd) {
+    return {
+      'Content-Type': 'application/json'
+    };
+  }
+
+  // Local-only convenience mode for development.
+  if (LOCAL_API_KEY) {
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${LOCAL_API_KEY}`,
+      'HTTP-Referer': window.location.origin,
+      'X-Title': 'AI Disease Predictor'
+    };
+  }
+
+  return null;
+};
+
+const fetchWithTimeout = async (url, options, timeoutMs = REQUEST_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const postChatCompletion = async (prompt, headers) => {
+  const response = await fetchWithTimeout(getApiEndpoint(), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: DEFAULT_MODEL,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`API Error ${response.status}: ${err}`);
+  }
+
+  const data = await response.json();
+  if (!data.choices || !data.choices[0]) {
+    throw new Error('Invalid response format from provider: ' + JSON.stringify(data));
+  }
+
+  return data.choices[0].message.content.trim();
+};
+
+const getMissingConfigMessage = () => {
+  if (import.meta.env.PROD) {
+    return 'Missing backend API config. On Netlify, set OPENROUTER_API_KEY in site environment variables for the built-in function.';
+  }
+  return 'No API configuration detected. Add VITE_API_PROXY_URL or a local VITE_OPENROUTER_API_KEY in .env.';
+};
 
 export const generateBotResponse = async (userText, previousSymptoms) => {
-  // If no API key is provided, fallback to standard response
-  if (!API_KEY || API_KEY.includes('your_openai_api_key')) {
+  const headers = getHeaders();
+
+  if (!headers) {
     return {
-      text: "⚠️ No API key detected. Please add your API key to the .env file.",
+      text: `Configuration error: ${getMissingConfigMessage()}`,
       readyForPrediction: previousSymptoms.length >= 3
     };
   }
@@ -17,32 +97,7 @@ Their latest message is: "${userText}"
 If you have enough information (at least 3-4 symptoms or a clear picture), reply EXACTLY with "READY_FOR_PREDICTION", otherwise ask exactly ONE brief relevant follow-up question. Do not provide a diagnosis yet.`;
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_KEY}`,
-        'HTTP-Referer': window.location.origin, // OpenRouter expects this
-        'X-Title': 'AI Disease Predictor' // OpenRouter expects this
-      },
-      body: JSON.stringify({
-        model: "gpt-oss-20b", // User's custom OpenRouter model
-        messages: [{ role: "user", content: prompt }]
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`API Error ${response.status}: ${err}`);
-    }
-
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices[0]) {
-      throw new Error("Invalid response format from OpenRouter: " + JSON.stringify(data));
-    }
-
-    const reply = data.choices[0].message.content.trim();
+    const reply = await postChatCompletion(prompt, headers);
 
     if (reply.includes("READY_FOR_PREDICTION")) {
       return { text: "Thank you. I have analyzed your symptoms and have enough information to provide an assessment. Click the 'Predict Disease' button below.", readyForPrediction: true };
@@ -51,19 +106,22 @@ If you have enough information (at least 3-4 symptoms or a clear picture), reply
     return { text: reply, readyForPrediction: false };
   } catch (error) {
     console.error("AI Error:", error);
-    return { text: "Network Error: " + error.message, readyForPrediction: false };
+    const isTimeout = error.name === 'AbortError';
+    return { text: isTimeout ? 'Request timed out. Please try again.' : 'Network Error: ' + error.message, readyForPrediction: false };
   }
 };
 
 export const runPredictionEngine = async (allSymptomsString) => {
-  if (!API_KEY || API_KEY.includes('your_openai_api_key')) {
+  const headers = getHeaders();
+
+  if (!headers) {
     return {
       condition: "Real AI Not Configured",
       confidence: "None",
       riskLevel: "Moderate",
-      advisory: "Please configure your API key.",
-      explanation: "The application is currently running without a real AI backend. You must provide an API key in the .env file.",
-      actions: ["Open .env file", "Paste your API key", "Restart the server"]
+      advisory: "Please configure your API settings.",
+      explanation: getMissingConfigMessage(),
+      actions: ["Set VITE_API_PROXY_URL", "Deploy a backend proxy", "Restart the app"]
     };
   }
 
@@ -83,32 +141,7 @@ Respond with a JSON object ONLY, strictly matching this structure (no markdown t
 }`;
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_KEY}`,
-        'HTTP-Referer': window.location.origin,
-        'X-Title': 'AI Disease Predictor'
-      },
-      body: JSON.stringify({
-        model: "gpt-oss-20b",
-        messages: [{ role: "user", content: prompt }]
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`API Error ${response.status}: ${err}`);
-    }
-
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices[0]) {
-      throw new Error("Invalid response format from OpenRouter: " + JSON.stringify(data));
-    }
-
-    let jsonString = data.choices[0].message.content.trim();
+    let jsonString = await postChatCompletion(prompt, headers);
 
     // Clean markdown blocks if the AI accidentally added them
     if (jsonString.startsWith('\`\`\`json')) {
@@ -120,12 +153,15 @@ Respond with a JSON object ONLY, strictly matching this structure (no markdown t
     return JSON.parse(jsonString);
   } catch (error) {
     console.error("AI Error:", error);
+    const isTimeout = error.name === 'AbortError';
     return {
       condition: "Error communicating with AI",
       confidence: "Unknown",
       riskLevel: "Moderate",
-      advisory: "Failed to communicate with OpenRouter.",
-      explanation: "There was an error parsing the AI response or the API rejected the request: " + error.message,
+      advisory: isTimeout ? 'The request timed out.' : "Failed to communicate with OpenRouter.",
+      explanation: isTimeout
+        ? 'The AI provider took too long to respond. Please try again in a few seconds.'
+        : "There was an error parsing the AI response or the API rejected the request: " + error.message,
       actions: ["Try again later", "Check your API key and model limits"]
     };
   }
