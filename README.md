@@ -27,6 +27,17 @@ A modern, responsive web application that acts as an AI-powered health assessmen
 
 Follow these steps to run the application locally on your machine.
 
+## ⚡ Quick Deploy (Netlify)
+
+If you want the fastest secure production setup, use Netlify with the included serverless function.
+
+1. Push this repo to GitHub.
+2. Import repo in Netlify.
+3. Add environment variable in Netlify: `OPENROUTER_API_KEY=your_key`.
+4. Deploy.
+
+The app will use `/.netlify/functions/chat` automatically in production, keeping your provider key off the client.
+
 ### 1. Installation
 
 First, clone the repository or open the project folder, then install the dependencies:
@@ -37,16 +48,23 @@ npm install
 
 ### 2. Environment Setup
 
-To use the real AI logic, you need an API key from OpenRouter.
+For production (GitHub Pages), do not place provider keys in frontend env files. The key would be public.
 
-1. Create a file named `.env` in the root directory.
-2. Add your OpenRouter API key to the file like this:
+Use one of these two modes:
+
+1. Secure mode (recommended): set a backend proxy URL in `.env`.
+
+```env
+VITE_API_PROXY_URL="https://your-backend.example.com/api/chat"
+```
+
+2. Local-only mode (development convenience): call OpenRouter directly from browser.
 
 ```env
 VITE_OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
-*(Note: If no API key is provided, the application will show a fallback warning when sending messages.)*
+If both are set, the app prefers `VITE_API_PROXY_URL`.
 
 ### 3. Run the Development Server
 
@@ -57,6 +75,93 @@ npm run dev
 ```
 
 Open your browser and navigate to the URL provided in your terminal (usually `http://localhost:5173/` or `http://localhost:5174/`).
+
+## GitHub Pages Deployment
+
+1. Create a GitHub repository and push this project.
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Publish:
+
+```bash
+npm run deploy
+```
+
+4. In GitHub repo settings, open Pages and set source to `gh-pages` branch.
+
+After this, each `npm run deploy` updates the live site.
+
+## Netlify Deployment (Recommended For Secure API)
+
+This repo is now preconfigured for Netlify using:
+
+1. `netlify.toml` for build/publish settings.
+2. `netlify/functions/chat.js` as a secure serverless proxy.
+
+### Steps
+
+1. Push your code to GitHub.
+2. In Netlify, click **Add new site** -> **Import an existing project**.
+3. Select your GitHub repo.
+4. Build settings should auto-detect from `netlify.toml`:
+
+```text
+Build command: npm run build
+Publish directory: dist
+Functions directory: netlify/functions
+```
+
+5. In Netlify site settings, open **Environment variables** and add:
+
+```env
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+6. Deploy the site.
+
+The frontend will call `/.netlify/functions/chat` automatically in production.
+
+### Optional: Custom backend URL
+
+If you want to use another backend (not Netlify Functions), set:
+
+```env
+VITE_API_PROXY_URL=https://your-backend.example.com/api/chat
+```
+
+in Netlify environment variables and redeploy.
+
+### Troubleshooting After Deploy
+
+If chat/prediction is not working on Netlify:
+
+1. Confirm `OPENROUTER_API_KEY` is set in Netlify environment variables.
+2. Trigger **Redeploy site** after changing environment variables.
+3. Check Netlify function logs for `chat` in the Netlify dashboard.
+4. Verify browser requests to `/.netlify/functions/chat` return HTTP 200.
+5. If using OpenAI instead of OpenRouter, set `OPENAI_API_KEY` and update provider logic in the function.
+
+## Using OpenAI/OpenRouter Safely With GitHub Pages
+
+GitHub Pages is static hosting. Any key inside frontend code can be copied by anyone.
+
+Safe pattern:
+
+1. Keep frontend on GitHub Pages.
+2. Deploy a small backend endpoint (Cloudflare Workers, Netlify Functions, Vercel Functions, or Render).
+3. Store your provider key only in backend secrets.
+4. Set frontend `VITE_API_PROXY_URL` to that backend endpoint.
+
+Minimal backend behavior:
+
+1. Accept POST with `{ model, messages }`.
+2. Add `Authorization: Bearer <secret key>` server-side.
+3. Forward to OpenAI/OpenRouter API.
+4. Return response JSON to frontend.
 
 ## ⚠️ Medical Disclaimer
 
@@ -71,3 +176,5 @@ Open your browser and navigate to the URL provided in your terminal (usually `ht
 * `src/components/ResultPanel.jsx` - Dashboard displaying the final AI Health Assessment.
 * `src/components/ActionButtons.jsx` - Buttons for Printing, Sharing, Resetting, and finding local specialists.
 * `src/utils/aiLogic.js` - The core integration with OpenRouter API for parsing chat and formatting strict JSON medical predictions.
+
+Documentation updated on 2026-03-28 with Netlify deployment and secure API proxy guidance.
