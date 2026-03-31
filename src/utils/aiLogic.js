@@ -1,46 +1,57 @@
-// Real AI Logic using OpenRouter API
+// Real AI logic with a safe production path through Netlify Functions.
+const CLIENT_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || import.meta.env.VITE_OPENAI_API_KEY;
+const HAS_CLIENT_KEY = Boolean(CLIENT_API_KEY && !CLIENT_API_KEY.includes('your_openai_api_key'));
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const NETLIFY_FUNCTION_URL = '/.netlify/functions/openrouter';
+const MODEL = 'gpt-oss-20b';
 
-const API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || import.meta.env.VITE_OPENAI_API_KEY;
-
-export const generateBotResponse = async (userText, previousSymptoms) => {
-  // If no API key is provided, fallback to standard response
-  if (!API_KEY || API_KEY.includes('your_openai_api_key')) {
-    return {
-      text: "⚠️ No API key detected. Please add your API key to the .env file.",
-      readyForPrediction: previousSymptoms.length >= 3
-    };
+const parseOpenRouterResponse = async (response) => {
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`API Error ${response.status}: ${err}`);
   }
 
+  const data = await response.json();
+  if (!data.choices || !data.choices[0]) {
+    throw new Error("Invalid response format from OpenRouter: " + JSON.stringify(data));
+  }
+
+  return data;
+};
+
+const callOpenRouter = async (messages) => {
+  if (HAS_CLIENT_KEY) {
+    const response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${CLIENT_API_KEY}`,
+        'HTTP-Referer': window.location.origin,
+        'X-Title': 'AI Disease Predictor'
+      },
+      body: JSON.stringify({ model: MODEL, messages })
+    });
+
+    return parseOpenRouterResponse(response);
+  }
+
+  const response = await fetch(NETLIFY_FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: MODEL, messages })
+  });
+
+  return parseOpenRouterResponse(response);
+};
+
+export const generateBotResponse = async (userText, previousSymptoms) => {
   const prompt = `You are an AI medical symptom assessor. 
 The user has reported the following previous symptoms: ${previousSymptoms.join(", ")}
 Their latest message is: "${userText}"
 If you have enough information (at least 3-4 symptoms or a clear picture), reply EXACTLY with "READY_FOR_PREDICTION", otherwise ask exactly ONE brief relevant follow-up question. Do not provide a diagnosis yet.`;
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_KEY}`,
-        'HTTP-Referer': window.location.origin, // OpenRouter expects this
-        'X-Title': 'AI Disease Predictor' // OpenRouter expects this
-      },
-      body: JSON.stringify({
-        model: "gpt-oss-20b", // User's custom OpenRouter model
-        messages: [{ role: "user", content: prompt }]
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`API Error ${response.status}: ${err}`);
-    }
-
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices[0]) {
-      throw new Error("Invalid response format from OpenRouter: " + JSON.stringify(data));
-    }
+    const data = await callOpenRouter([{ role: "user", content: prompt }]);
 
     const reply = data.choices[0].message.content.trim();
 
@@ -51,22 +62,14 @@ If you have enough information (at least 3-4 symptoms or a clear picture), reply
     return { text: reply, readyForPrediction: false };
   } catch (error) {
     console.error("AI Error:", error);
-    return { text: "Network Error: " + error.message, readyForPrediction: false };
+    return {
+      text: "⚠️ AI backend is not configured. Set OPENROUTER_API_KEY in Netlify environment variables (or VITE_OPENROUTER_API_KEY for local .env), then redeploy.",
+      readyForPrediction: previousSymptoms.length >= 3
+    };
   }
 };
 
 export const runPredictionEngine = async (allSymptomsString) => {
-  if (!API_KEY || API_KEY.includes('your_openai_api_key')) {
-    return {
-      condition: "Real AI Not Configured",
-      confidence: "None",
-      riskLevel: "Moderate",
-      advisory: "Please configure your API key.",
-      explanation: "The application is currently running without a real AI backend. You must provide an API key in the .env file.",
-      actions: ["Open .env file", "Paste your API key", "Restart the server"]
-    };
-  }
-
   const prompt = `You are an expert AI medical assistant. A user has reported the following symptoms: "${allSymptomsString}".
 Respond with a JSON object ONLY, strictly matching this structure (no markdown tags, just pure JSON):
 {
@@ -83,30 +86,7 @@ Respond with a JSON object ONLY, strictly matching this structure (no markdown t
 }`;
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_KEY}`,
-        'HTTP-Referer': window.location.origin,
-        'X-Title': 'AI Disease Predictor'
-      },
-      body: JSON.stringify({
-        model: "gpt-oss-20b",
-        messages: [{ role: "user", content: prompt }]
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`API Error ${response.status}: ${err}`);
-    }
-
-    const data = await response.json();
-    
-    if (!data.choices || !data.choices[0]) {
-      throw new Error("Invalid response format from OpenRouter: " + JSON.stringify(data));
-    }
+    const data = await callOpenRouter([{ role: "user", content: prompt }]);
 
     let jsonString = data.choices[0].message.content.trim();
 
@@ -121,12 +101,12 @@ Respond with a JSON object ONLY, strictly matching this structure (no markdown t
   } catch (error) {
     console.error("AI Error:", error);
     return {
-      condition: "Error communicating with AI",
+      condition: "AI Backend Not Configured",
       confidence: "Unknown",
       riskLevel: "Moderate",
-      advisory: "Failed to communicate with OpenRouter.",
-      explanation: "There was an error parsing the AI response or the API rejected the request: " + error.message,
-      actions: ["Try again later", "Check your API key and model limits"]
+      advisory: "Unable to reach AI service.",
+      explanation: "Set OPENROUTER_API_KEY in Netlify (or VITE_OPENROUTER_API_KEY in local .env) and redeploy. Details: " + error.message,
+      actions: ["Check Netlify environment variables", "Redeploy the site", "Verify OpenRouter account and model access"]
     };
   }
 };

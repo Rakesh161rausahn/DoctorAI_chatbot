@@ -48,6 +48,16 @@ VITE_OPENROUTER_API_KEY="sk-or-v1-..."
 
 *(Note: If no API key is provided, the application will show a fallback warning when sending messages.)*
 
+### 2.1 Netlify Environment Setup (Recommended for Production)
+
+For deployed sites, configure the key on Netlify so it stays server-side:
+
+1. Go to Site configuration -> Environment variables.
+2. Add `OPENROUTER_API_KEY` with your real key value.
+3. Redeploy the site after saving.
+
+The app calls a Netlify Function at `/.netlify/functions/openrouter`, which uses `OPENROUTER_API_KEY` securely on the server.
+
 ### 3. Run the Development Server
 
 Start the Vite local development server:
